@@ -1,8 +1,9 @@
 // Package notification is the kos-notification first-party extension: the
 // channel, subscription and delivery-record classes, the page that shows them,
-// and the channel credential boundary. A credential is written with the channel
-// configuration, is never read back, and never enters a declared surface
-// (NOTIFY-C-1, NOTIFY-C-5, NOTIFY-C-7; KOSD-C-14, KOSD-C-18).
+// the delivery controller, and the channel credential boundary. A credential is
+// written with the channel configuration, is never read back, and never enters
+// a declared surface (NOTIFY-C-1, NOTIFY-C-3, NOTIFY-C-5, NOTIFY-C-7;
+// KOSD-C-14, KOSD-C-18).
 package notification
 
 import (
