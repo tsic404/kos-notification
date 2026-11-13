@@ -2,12 +2,14 @@
 // this product: the package is built by the one SDK path, installing it makes
 // its declared contributions appear one-to-one, uninstalling withdraws them and
 // keeps the data its declaration retains, the kernel surface does not change,
-// and a digest mismatch is refused (KOSD-AC-72, KOSD-TC-155).
+// the kernel's package path accepts the artifact, and a digest mismatch is
+// refused (KOSD-AC-72, KOSD-TC-155).
 package kosdtc155
 
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -43,8 +45,10 @@ func TestTC155InstallAndUninstall(t *testing.T) {
 
 	// Uninstall keeps the delivery records: the record class is declared
 	// retained and appears in the residual list (NOTIFY-C-6, KOSD-C-29).
-	if action := declaration.UninstallRetention.Contributions[notification.KindDeliveryRecord]; action != manifest.Retain {
-		t.Fatalf("the delivery record retention is %q, want %q", action, manifest.Retain)
+	if !slices.ContainsFunc(declaration.Retention, func(entry manifest.Retention) bool {
+		return entry.Resource == notification.KindDeliveryRecord && entry.Keep
+	}) {
+		t.Fatalf("the delivery record is not declared kept on uninstall: %+v", declaration.Retention)
 	}
 
 	// The visible contributions correspond one-to-one with the declaration.
@@ -55,11 +59,11 @@ func TestTC155InstallAndUninstall(t *testing.T) {
 	}
 	for index, class := range classes {
 		declared := declaration.Contributions.ObjectClasses[index]
-		if class != declared {
+		if !reflect.DeepEqual(class, declared) {
 			t.Errorf("served class %d is %+v, declared %+v", index, class, declared)
 		}
-		if class.APIGroup != notification.APIGroup || class.Version != notification.ObjectVersion {
-			t.Errorf("class %s is served from %s/%s", class.Kind, class.APIGroup, class.Version)
+		if class.Group != notification.APIGroup || !slices.Equal(class.Versions, []string{notification.ObjectVersion}) {
+			t.Errorf("class %s is served from %s/%s", class.Kind, class.Group, class.Versions)
 		}
 	}
 	served := map[string]bool{}
@@ -170,30 +174,46 @@ func TestTC155DigestMismatchRefused(t *testing.T) {
 	}
 }
 
-// TestTC155KernelInstallPathRejectsSDKPackage records the cross-repository gap
-// this slice cannot close from the product side: the current kernel install path
-// reads the artifact as a declaration document and digests the whole file,
-// while the SDK's package is an archive whose digest is framed over the
-// manifest. The product adds no installation channel and no product-specific
-// field, so the gap is reported with the two kernel refusals as evidence.
-func TestTC155KernelInstallPathRejectsSDKPackage(t *testing.T) {
+// TestTC155KernelReadsThePackage checks the kernel's package path over this
+// product's artifact: the digest the install request names covers the archive,
+// the declaration parses, and every contribution loads without a class problem
+// (KOSD-C-17, KOSD-AC-72).
+func TestTC155KernelReadsThePackage(t *testing.T) {
 	artifact, archive, err := notification.Artifact()
 	if err != nil {
 		t.Fatalf("build the package: %v", err)
 	}
 
-	// pkg/kosd.Parse reads the artifact bytes as the declaration document.
-	if _, err := kosd.Parse(archive); err == nil {
-		t.Fatalf("the kernel parsed the SDK package as a declaration document; the cross-repository gap no longer exists")
-	}
-	// pkg/kosd.Package verifies the whole artifact's sha256, which is not
-	// the SDK digest framed over the manifest.
 	installed := kosd.Package{Reference: reference, Digest: artifact.Digest.String(), Content: archive}
-	if err := installed.Verify(); err == nil {
-		t.Fatalf("the kernel accepted the SDK digest as a whole-archive sha256; the gap no longer exists")
+	read, err := installed.Verify()
+	if err != nil {
+		t.Fatalf("the kernel refused the package: %v", err)
 	}
-	if kosd.DigestOf(archive) == artifact.Digest.String() {
-		t.Fatalf("the SDK digest equals the whole-archive sha256; the gap no longer exists")
+	if read.Digest != artifact.Digest.String() {
+		t.Fatalf("the kernel reads the digest %q, the package carries %q", read.Digest, artifact.Digest)
+	}
+
+	loaded, err := read.Declaration.Load()
+	if err != nil {
+		t.Fatalf("the kernel refused the declaration: %v", err)
+	}
+	if len(loaded.Problems) != 0 {
+		t.Fatalf("the kernel reports class problems: %+v", loaded.Problems)
+	}
+	if loaded.Identifier != notification.Identifier {
+		t.Errorf("the kernel loaded the identifier %q", loaded.Identifier)
+	}
+	if len(loaded.Contributions.ObjectClasses) != 3 || len(loaded.Contributions.Controllers) != 1 {
+		t.Errorf("the kernel loaded %d classes and %d controllers, want 3 and 1",
+			len(loaded.Contributions.ObjectClasses), len(loaded.Contributions.Controllers))
+	}
+	if len(loaded.Contributions.Pages) != 1 {
+		t.Errorf("the kernel loaded %d pages, want 1", len(loaded.Contributions.Pages))
+	}
+	if !slices.ContainsFunc(loaded.Retention, func(entry kosd.Retention) bool {
+		return entry.Resource == notification.KindDeliveryRecord && entry.Keep
+	}) {
+		t.Errorf("the kernel carries the retention %+v", loaded.Retention)
 	}
 }
 

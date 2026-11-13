@@ -262,16 +262,11 @@ func classRoute(kind string) string {
 // declares for the create entry.
 func listedChannelKinds(t *testing.T) []string {
 	t.Helper()
-	manifest := notification.Manifest()
-	config, ok := manifest["config"].(map[string]any)
-	if !ok {
-		t.Fatalf("the declaration carries no config block")
+	declared, err := notification.Validated()
+	if err != nil {
+		t.Fatalf("the declaration is invalid: %v", err)
 	}
-	schema, ok := config["schema"].(map[string]any)
-	if !ok {
-		t.Fatalf("the config block carries no schema")
-	}
-	channels, ok := schema["channels"].(map[string]any)
+	channels, ok := declared.Configuration.Schema["channels"].(map[string]any)
 	if !ok {
 		t.Fatalf("the schema declares no channel structure")
 	}

@@ -108,11 +108,10 @@ func (c *Cluster) Uninstall(name string) ([]Residual, error) {
 	if !ok {
 		return nil, fmt.Errorf("component %s is not installed", name)
 	}
-	retention := component.Manifest.UninstallRetention.Contributions
+	retention := component.Manifest.Retention
 	for _, class := range component.Manifest.Contributions.ObjectClasses {
 		stored := c.objects[class.Kind]
-		action, declared := retention[class.Kind]
-		if !declared || action == manifest.Delete {
+		if !keepsClass(retention, class) {
 			delete(c.objects, class.Kind)
 			continue
 		}
@@ -129,6 +128,19 @@ func (c *Cluster) Uninstall(name string) ([]Residual, error) {
 		}
 	}
 	return c.Residuals(name), nil
+}
+
+// keepsClass reports whether the declaration keeps one class's data on
+// uninstall; an entry matches by class, kind or resource, and an undeclared
+// class is deleted (KOSD-C-29).
+func keepsClass(retention []manifest.Retention, class extension.ObjectClassDeclaration) bool {
+	key := class.Group + "/" + class.Kind
+	for _, entry := range retention {
+		if entry.Resource == key || entry.Resource == class.Kind || entry.Resource == class.Resource {
+			return entry.Keep
+		}
+	}
+	return false
 }
 
 // Seed stores one object as if the product's controller wrote it.
@@ -189,14 +201,16 @@ type KernelSurface struct {
 func (c *Cluster) Surface() KernelSurface {
 	surface := KernelSurface{CoreKinds: append([]string(nil), extension.CoreObjectKinds...)}
 	for _, component := range c.active() {
-		for _, capability := range component.Manifest.Contributions.Capabilities {
-			name, _ := capability["name"].(string)
-			surface.Capabilities = append(surface.Capabilities, name)
+		if capabilities := component.Manifest.Contributions.Capabilities; capabilities != nil {
+			for _, capability := range capabilities.Items {
+				name, _ := capability["name"].(string)
+				surface.Capabilities = append(surface.Capabilities, name)
+			}
 		}
 		for _, controller := range component.Manifest.Contributions.Controllers {
-			for _, scope := range controller.WriteScopes {
+			for _, managed := range controller.Manages {
 				surface.ControllerScope = append(surface.ControllerScope,
-					controller.Name+":"+scope.APIGroup+"/"+scope.Kind)
+					controller.ID+":"+managed.Group+"/"+managed.Kind)
 			}
 		}
 	}
