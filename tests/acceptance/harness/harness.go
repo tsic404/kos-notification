@@ -156,6 +156,17 @@ func (c *Cluster) ObjectClasses() []extension.ObjectClassDeclaration {
 	return classes
 }
 
+// Serves reports whether one object class is served: a class is served only
+// while a component declaring it is active (KOSD-C-19, KOSD-C-28).
+func (c *Cluster) Serves(kind string) bool {
+	for _, class := range c.ObjectClasses() {
+		if class.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 // Pages returns the pages of every active component (KOSD-C-28).
 func (c *Cluster) Pages() []map[string]any {
 	pages := []map[string]any{}

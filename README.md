@@ -53,12 +53,23 @@ go run ./cmd/kos-notification-pack -out dist/kos-notification-1.0.0.tar.gz
 - 投递请求体是 JSON：订阅名、渠道名、来源对象、触发类型（`Event` / `State`）、事件原因与发生时刻。记录由控制器写入；用户不能修改或删除，页面不提供入口。
 - 控制器只写投递记录（声明中的 `writeScopes`），不写内核对象，不建事件存储。
 
+## 记录读取与保留
+
+投递记录按来源的可见性读取，来源消失后仍保留（`NOTIFY-C-6`）。读取入口是 `RecordReader.Read`：
+
+- 来源是应用时按该应用的可见性判定：Owner 恒可读；Member 在 `spec.visibility.members` 列名时可读；Guest 在 `spec.visibility.allowGuests` 为真时可读。
+- 来源是非应用对象时只对 Owner 与拥有该对象的 Member 可读，Guest 不可读。
+- 请求方看不到来源时读取被拒绝并给出原因（`RecordNotVisible`），不以空结果表示无记录。
+- 来源对象与订阅被删除后记录保留并可读，返回值里的 `sourceExists` / `subscriptionExists` 标出它们已不存在。记录只保存来源的身份值，不持有阻塞式引用，所以来源删除不被记录挡住。
+- 停用后记录保留、对象类不再被服务，因而没有新增记录；重新启用后恢复新增，已有记录不变。卸载按声明的 `retain` 保留三个对象类并把记录列入遗留清单。
+
 ## 跨仓接口落差（上报，不在本仓修补）
 
 1. **装载路径**：内核把工件当声明文档解析、按整份工件 sha256 校验；SDK 包是归档且摘要分帧覆盖清单，装载被拒绝。
 2. **读取声明**：控制器读核心组的 `Event` 与来源对象的状态条件，而 SDK 的读范围要求 `apiGroup` 非空，核心组（空字符串）无法命名。清单因此不带 `permissions.read`，也没有用占位组冒充；内核侧的声明形状（`GroupKind` 空组即核心组）支持这一读取。
 3. **记录写权限**：清单以 `objectRoles: {DeliveryRecord: []}` 声明没有用户角色可写，但现内核把空的写者列表当作「未声明」，未声明的扩展类由 Owner 可写（`pkg/extension/registry.go`、`pkg/access/policy.go`）。产品自己的写入路径拒绝任何用户写记录（`AllowWrite`），内核侧的强制需另行补齐。
 4. **页面写入口的产品校验**：页面写入口走通用对象路由 `/api/v1/resources/<Kind>`，内核只校验对象身份、不解释扩展 spec（`pkg/controlplane/objects.go` 的 `normalizeExtension`），也没有调用产品写路径的钩子；`config.schema.channels` 同样没有框架消费者（`pkg/pages/form.go` 的 `FormOf` 读的是应用 `ConfigField`）。因此「不支持的渠道类型在创建与修改时被拒绝」与「凭据随渠道配置写入」在产品声明面上没有强制点，校验目前只在 `Writers.WriteChannel` / `Writers.WriteSubscription` 生效。
+5. **记录读取的产品判定**：通用对象路由的读（`pkg/controlplane/server.go` 的 `handleGet` / `handleList`）返回存储中的扩展对象，不调用产品的读判定，也没有按 `KOSD-C-59` / `KOSD-C-64` 过滤扩展对象的钩子。记录可见性与「来源已不存在」标记因此只在 `RecordReader.Read` 生效；内核侧的强制需另行补齐。
 
 ## 测试
 
@@ -75,4 +86,5 @@ go build ./... && go vet ./... && go test ./...
 | `tests/acceptance/NOTIFY-TC-3` | 创建入口的类型列表与写入接受的一致；不支持的类型被拒绝并给出原因；订阅目标渠道集合可读；页面三类展示项的来源、修改入口（渠道/订阅各走本类路由）与只读原因；空投影下三项读到空列表；停用后页面与对象类消失、记录保留 |
 | `tests/acceptance/NOTIFY-TC-4` | 同一订阅的可用渠道有成功记录；不可达与未设置凭据的渠道各按有界重试后停在终态并保留原因；另一条订阅不受影响 |
 | `tests/acceptance/NOTIFY-TC-5` | 凭据只有一个写入入口、只回读是否已设置、非 Owner 写入被拒绝；空凭据撤销注册；渠道写入失败不留凭据；各可观察面不含凭据值 |
+| `tests/acceptance/NOTIFY-TC-6` | 同一条记录：Owner 与应用可见成员可读、不拥有来源的 Member 与 Guest 被拒绝并给出原因；来源应用删除成功而记录仍可读并标出来源已不存在；订阅删除后记录仍可读并标出；停用后无新增、重新启用恢复新增且已有记录不变；卸载后记录进遗留清单 |
 | `tests/acceptance/KOSD-TC-155` | 打包一次、装载一次、卸载一次；贡献与声明一一对应；未声明保留语义的类按内核默认删除；保留数据进遗留清单；内核 kind 集合与能力基线不变；摘要不匹配拒绝装载 |
