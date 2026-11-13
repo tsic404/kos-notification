@@ -24,6 +24,7 @@ const (
 	CodeUnsupportedChannelKind = "UnsupportedChannelKind"
 	CodeInvalidChannel         = "InvalidChannel"
 	CodeInvalidSubscription    = "InvalidSubscription"
+	CodeRecordNotVisible       = "RecordNotVisible"
 )
 
 // ChannelKindWebhook is the one channel type the product supports today
@@ -154,7 +155,9 @@ type RecordSpec struct {
 	Channel string `json:"channel"`
 	// Subscription is the rule that matched.
 	Subscription string `json:"subscription"`
-	// Source is the object the event was about.
+	// Source is the object the event was about. It is kept as a value, so the
+	// record neither blocks the source's deletion nor disappears with it
+	// (NOTIFY-C-6).
 	Source ObjectRef `json:"source"`
 	// Attempt is the attempt number, starting at one.
 	Attempt int `json:"attempt"`

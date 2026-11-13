@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -15,12 +16,18 @@ import (
 // double, not an installation channel and not the run kernel; the acceptance
 // cases use it to observe what the controller reads and what it writes.
 type ControlPlane struct {
+	// Served reports whether one object class is served. A disabled or
+	// uninstalled component's class is not served, so no new object of it is
+	// written (KOSD-C-19, KOSD-C-28); nil serves every class.
+	Served func(kind string) bool
+
 	mutex         sync.Mutex
 	events        []notification.Event
 	channels      map[string]notification.Channel
 	secrets       map[string]string
 	subscriptions map[string]notification.SubscriptionState
 	states        map[notification.ObjectRef]notification.ObjectState
+	sources       map[notification.ObjectRef]notification.Source
 	records       []notification.Record
 }
 
@@ -31,6 +38,7 @@ func NewControlPlane() *ControlPlane {
 		secrets:       map[string]string{},
 		subscriptions: map[string]notification.SubscriptionState{},
 		states:        map[notification.ObjectRef]notification.ObjectState{},
+		sources:       map[notification.ObjectRef]notification.Source{},
 	}
 }
 
@@ -82,6 +90,48 @@ func (c *ControlPlane) RemoveSubscription(name string) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	delete(c.subscriptions, name)
+}
+
+// SubscriptionExists reports whether one subscription is still established
+// (NOTIFY-C-6).
+func (c *ControlPlane) SubscriptionExists(_ context.Context, name string) (bool, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	_, found := c.subscriptions[name]
+	return found, nil
+}
+
+// AddSource stores one source object and the visibility its records are read
+// under (KOSD-C-59, KOSD-C-64).
+func (c *ControlPlane) AddSource(ref notification.ObjectRef, source notification.Source) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.sources[ref] = notification.Source{
+		Members:     append([]string(nil), source.Members...),
+		AllowGuests: source.AllowGuests,
+		Owner:       source.Owner,
+	}
+}
+
+// RemoveSource deletes one source object. Nothing the product stores holds it
+// alive, so the delete succeeds while its delivery records remain
+// (NOTIFY-C-6).
+func (c *ControlPlane) RemoveSource(ref notification.ObjectRef) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	if _, found := c.sources[ref]; !found {
+		return fmt.Errorf("source %s is not stored", ref)
+	}
+	delete(c.sources, ref)
+	return nil
+}
+
+// Source reads one source object and its visibility (KOSD-C-59, KOSD-C-64).
+func (c *ControlPlane) Source(_ context.Context, ref notification.ObjectRef) (notification.Source, bool, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	source, found := c.sources[ref]
+	return source, found, nil
 }
 
 // SetObjectState records the observed state of one source object.
@@ -158,11 +208,30 @@ func (c *ControlPlane) Records(_ context.Context, query notification.RecordQuery
 	return records, nil
 }
 
+// RecordsOf lists every stored record of one source, oldest first
+// (NOTIFY-C-6).
+func (c *ControlPlane) RecordsOf(_ context.Context, source notification.ObjectRef) ([]notification.Record, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	records := []notification.Record{}
+	for _, record := range c.records {
+		if record.Spec.Source != source {
+			continue
+		}
+		records = append(records, record)
+	}
+	return records, nil
+}
+
 // CreateRecord stores one attempt's record, refusing a name that is already
-// stored (NOTIFY-C-2).
+// stored (NOTIFY-C-2) and refusing any write to a class that is not served
+// (KOSD-C-19).
 func (c *ControlPlane) CreateRecord(_ context.Context, record notification.Record) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
+	if c.Served != nil && !c.Served(notification.KindDeliveryRecord) {
+		return fmt.Errorf("%s is not served: its component is disabled or uninstalled", notification.KindDeliveryRecord)
+	}
 	for _, stored := range c.records {
 		if stored.Name == record.Name {
 			return notification.ErrRecordExists
