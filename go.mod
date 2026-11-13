@@ -3,8 +3,8 @@ module github.com/tsic404/kos-notification
 go 1.26.0
 
 require (
-	github.com/tsic404/kos-sdk v0.0.0-20261105095206-0a281eb1d790
-	github.com/tsic404/kosd v0.0.0-20261111055548-4c6df9359fd5
+	github.com/tsic404/kos-sdk v0.0.0-20261113175352-db19ac3e7b97
+	github.com/tsic404/kosd v0.0.0-20261113133102-04c9f121a115
 )
 
 require (

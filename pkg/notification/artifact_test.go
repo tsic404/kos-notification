@@ -85,21 +85,21 @@ func TestDigestCoversTheDeclaration(t *testing.T) {
 // and that no missing item is defaulted (SDK-C-3).
 func TestDeclarationIsRefusedOutsideTheClosedSet(t *testing.T) {
 	missing := Manifest()
-	delete(missing, "id")
+	delete(missing, "identifier")
 	if _, _, err := packaging.Pack(missing, nil); err == nil {
 		t.Fatalf("a declaration without an identifier produced a package")
 	}
 
 	unknown := Manifest()
-	unknown["settings"] = []any{}
+	unknown["status"] = map[string]any{}
 	if _, _, err := packaging.Pack(unknown, nil); err == nil {
 		t.Fatalf("a declaration with an unknown field produced a package")
 	}
 
 	noConfig := Manifest()
-	delete(noConfig, "config")
+	delete(noConfig, "configuration")
 	if _, _, err := packaging.Pack(noConfig, nil); err == nil {
-		t.Fatalf("a declaration without a config block produced a package")
+		t.Fatalf("a declaration without a configuration block produced a package")
 	}
 }
 
