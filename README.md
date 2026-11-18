@@ -11,8 +11,8 @@ KOS 系统应用：把事件与状态变化按订阅投递到外部渠道，并�
 | 对象类 `Channel`、`Subscription`、`DeliveryRecord` | API 组 `notification.kos.tsic.top/v1`，集群作用域 |
 | 控制器 `delivery` | 只写 `DeliveryRecord`；读核心组 `events` 与来源对象的状态条件 |
 | 页面 `notification` | 渠道、订阅、投递记录三处展示项 |
-| 对象角色 | 渠道与订阅：Owner 可写；投递记录：无用户角色可写，由控制器写入 |
-| 卸载保留 | 三个对象类均 `retain` |
+| 对象角色 | 渠道与订阅：Owner 可写；投递记录：声明面只认会话角色，未声明写者（内核当前按 Owner 可写放行），本产品的写路径拒绝任何用户写记录 |
+| 卸载保留 | 三个对象类均声明保留（`retention` 逐类 `keep`） |
 
 渠道与订阅的创建、修改与删除走控制面 API 的对象路由（`/api/v1/resources/<Kind>`），页面声明这三类入口；投递记录没有用户入口。
 
@@ -38,9 +38,7 @@ go run ./cmd/kos-notification-pack -out dist/kos-notification-1.0.0.tar.gz
 
 ## 装载与卸载
 
-装载由创建系统组件发起：`spec.package.reference` 指向归档，`spec.package.digest` 是打包打印的摘要。内核按 `KOSD-C-17` 校验摘要、读声明并激活贡献；停用按 `KOSD-C-28` 撤下页面与对象类并保留对象；卸载按 `KOSD-C-29` 的声明保留数据并列入遗留清单。
-
-当前内核装载路径把工件字节直接当声明文档解析（`pkg/extension.Parse`）、对整份工件取 sha256（`DigestOf`），而 SDK 包是含清单与资产的归档、摘要按条目分帧计算。两者不对齐时装载被拒绝，属跨仓接口对齐：本仓不新建安装通道、不加产品专用字段、不改 kosd。可执行的证据在 `tests/acceptance/KOSD-TC-155`。
+装载由创建系统组件发起：`spec.package.reference` 指向归档，`spec.package.digest` 是打包打印的摘要。内核按 `KOSD-C-17` 校验摘要、读声明并激活贡献；停用按 `KOSD-C-28` 撤下页面与对象类并保留对象；卸载按 `KOSD-C-29` 的声明保留数据并列入遗留清单。本仓的验收把打包产物交给内核的包读取路径，核对摘要、声明解析与逐类装载（`tests/acceptance/KOSD-TC-155`）。
 
 ## 投递
 
@@ -51,7 +49,7 @@ go run ./cmd/kos-notification-pack -out dist/kos-notification-1.0.0.tar.gz
 - 每条订阅的目标渠道各自投递；渠道不可达或未设置凭据都记为失败并给出原因，不影响同一订阅的其他渠道，也不影响其他订阅。
 - 每次尝试写一条 `DeliveryRecord`（目标渠道、来源对象、尝试序号、结果与失败原因）；失败按有界重试（默认三次），到上限后保留最后一次原因并停止。记录集合按投递分组可读出尝试次数与终态。
 - 投递请求体是 JSON：订阅名、渠道名、来源对象、触发类型（`Event` / `State`）、事件原因与发生时刻。记录由控制器写入；用户不能修改或删除，页面不提供入口。
-- 控制器只写投递记录（声明中的 `writeScopes`），不写内核对象，不建事件存储。
+- 控制器只写投递记录（声明中的 `manages` 与只开本扩展 API 组的 `scope`），不写内核对象，不建事件存储。
 
 ## 记录读取与保留
 
@@ -61,15 +59,13 @@ go run ./cmd/kos-notification-pack -out dist/kos-notification-1.0.0.tar.gz
 - 来源是非应用对象时只对 Owner 与拥有该对象的 Member 可读，Guest 不可读。
 - 请求方看不到来源时读取被拒绝并给出原因（`RecordNotVisible`），不以空结果表示无记录。
 - 来源对象与订阅被删除后记录保留并可读，返回值里的 `sourceExists` / `subscriptionExists` 标出它们已不存在。记录只保存来源的身份值，不持有阻塞式引用，所以来源删除不被记录挡住。
-- 停用后记录保留、对象类不再被服务，因而没有新增记录；重新启用后恢复新增，已有记录不变。卸载按声明的 `retain` 保留三个对象类并把记录列入遗留清单。
+- 停用后记录保留、对象类不再被服务，因而没有新增记录；重新启用后恢复新增，已有记录不变。卸载按逐类保留声明保留三个对象类并把记录列入遗留清单。
 
 ## 跨仓接口落差（上报，不在本仓修补）
 
-1. **装载路径**：内核把工件当声明文档解析、按整份工件 sha256 校验；SDK 包是归档且摘要分帧覆盖清单，装载被拒绝。
-2. **读取声明**：控制器读核心组的 `Event` 与来源对象的状态条件，而 SDK 的读范围要求 `apiGroup` 非空，核心组（空字符串）无法命名。清单因此不带 `permissions.read`，也没有用占位组冒充；内核侧的声明形状（`GroupKind` 空组即核心组）支持这一读取。
-3. **记录写权限**：清单以 `objectRoles: {DeliveryRecord: []}` 声明没有用户角色可写，但现内核把空的写者列表当作「未声明」，未声明的扩展类由 Owner 可写（`pkg/extension/registry.go`、`pkg/access/policy.go`）。产品自己的写入路径拒绝任何用户写记录（`AllowWrite`），内核侧的强制需另行补齐。
-4. **页面写入口的产品校验**：页面写入口走通用对象路由 `/api/v1/resources/<Kind>`，内核只校验对象身份、不解释扩展 spec（`pkg/controlplane/objects.go` 的 `normalizeExtension`），也没有调用产品写路径的钩子；`config.schema.channels` 同样没有框架消费者（`pkg/pages/form.go` 的 `FormOf` 读的是应用 `ConfigField`）。因此「不支持的渠道类型在创建与修改时被拒绝」与「凭据随渠道配置写入」在产品声明面上没有强制点，校验目前只在 `Writers.WriteChannel` / `Writers.WriteSubscription` 生效。
-5. **记录读取的产品判定**：通用对象路由的读（`pkg/controlplane/server.go` 的 `handleGet` / `handleList`）返回存储中的扩展对象，不调用产品的读判定，也没有按 `KOSD-C-59` / `KOSD-C-64` 过滤扩展对象的钩子。记录可见性与「来源已不存在」标记因此只在 `RecordReader.Read` 生效；内核侧的强制需另行补齐。
+1. **记录写权限**：声明面的写者词表只有会话角色，且空的写者集合在打包序列化时被省略，所以「该类没有任何用户角色可写」（`NOTIFY-C-3`）在清单里无法表达。内核把未登记写者的扩展类按 `KOSD-C-59` 默认放行 Owner（`pkg/extension/registry.go`、`pkg/access/policy.go`）。本产品的写入路径仍拒绝任何用户写记录（`AllowWrite`），内核侧的强制需另行补齐。
+2. **页面写入口的产品校验**：页面写入口走通用对象路由 `/api/v1/resources/<Kind>`，内核只校验对象身份、不解释扩展 spec（`pkg/controlplane/objects.go` 的 `normalizeExtension`），也没有调用产品写路径的钩子；`configuration.schema.channels` 同样没有框架消费者（`pkg/pages/form.go` 的 `FormOf` 读的是应用 `ConfigField`）。因此「不支持的渠道类型在创建与修改时被拒绝」与「凭据随渠道配置写入」在产品声明面上没有强制点，校验目前只在 `Writers.WriteChannel` / `Writers.WriteSubscription` 生效。
+3. **记录读取的产品判定**：通用对象路由的读（`pkg/controlplane/server.go` 的 `handleGet` / `handleList`）返回存储中的扩展对象，不调用产品的读判定，也没有按 `KOSD-C-59` / `KOSD-C-64` 过滤扩展对象的钩子。记录可见性与「来源已不存在」标记因此只在 `RecordReader.Read` 生效；内核侧的强制需另行补齐。
 
 ## 测试
 
@@ -77,7 +73,7 @@ go run ./cmd/kos-notification-pack -out dist/kos-notification-1.0.0.tar.gz
 go build ./... && go vet ./... && go test ./...
 ```
 
-`tests/acceptance/harness` 是按 `KOSD-C-17`/`C-28`/`C-29` 规则搭的 fixture，验证声明的贡献与启停、保留语义；它不是安装通道。`kosd` 只作为测试依赖，用来核对页面形状、框架版本范围与内核装载路径的行为。
+`tests/acceptance/harness` 是按 `KOSD-C-17`/`C-28`/`C-29` 规则搭的 fixture，验证声明的贡献与启停、保留语义；它不是安装通道。`kosd` 只作为测试依赖，用来核对页面形状、框架版本范围，以及内核的包读取、声明解析与逐类装载。
 
 | 用例 | 判据 |
 |---|---|
@@ -87,4 +83,4 @@ go build ./... && go vet ./... && go test ./...
 | `tests/acceptance/NOTIFY-TC-4` | 同一订阅的可用渠道有成功记录；不可达与未设置凭据的渠道各按有界重试后停在终态并保留原因；另一条订阅不受影响 |
 | `tests/acceptance/NOTIFY-TC-5` | 凭据只有一个写入入口、只回读是否已设置、非 Owner 写入被拒绝；空凭据撤销注册；渠道写入失败不留凭据；各可观察面不含凭据值 |
 | `tests/acceptance/NOTIFY-TC-6` | 同一条记录：Owner 与应用可见成员可读、不拥有来源的 Member 与 Guest 被拒绝并给出原因；来源应用删除成功而记录仍可读并标出来源已不存在；订阅删除后记录仍可读并标出；停用后无新增、重新启用恢复新增且已有记录不变；卸载后记录进遗留清单 |
-| `tests/acceptance/KOSD-TC-155` | 打包一次、装载一次、卸载一次；贡献与声明一一对应；未声明保留语义的类按内核默认删除；保留数据进遗留清单；内核 kind 集合与能力基线不变；摘要不匹配拒绝装载 |
+| `tests/acceptance/KOSD-TC-155` | 打包一次、装载一次、卸载一次；贡献与声明一一对应；三个对象类均按声明保留、保留数据进遗留清单；内核 kind 集合与能力基线不变；内核包路径接受该产物并逐类装载无问题；摘要不匹配拒绝装载 |

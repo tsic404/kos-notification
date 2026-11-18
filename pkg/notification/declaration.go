@@ -48,9 +48,9 @@ const (
 // records; the delivery unit implements it (KOSD-C-20, NOTIFY-C-3).
 const ControllerDelivery = "delivery"
 
-// StatusWriterController is the writer of an extension object's status when a
-// controller of this package writes it (KOSD-C-18).
-const StatusWriterController = "controller"
+// CoreKindEvent is the core-group object the delivery controller reads: the run
+// kernel's recent event stream (KOSD-C-64, NOTIFY-C-2).
+const CoreKindEvent = "Event"
 
 // Page and item identities of the notification page (KOSD-C-53, NOTIFY-C-7).
 const (
@@ -133,47 +133,19 @@ func AllowWrite(kind string, role Role) error {
 // (SDK-C-3).
 func Manifest() map[string]any {
 	return map[string]any{
-		"id":               Identifier,
+		"identifier":       Identifier,
 		"version":          Version,
 		"frameworkVersion": FrameworkVersion,
+		"apiGroup":         APIGroup,
 		"contributions": map[string]any{
 			"objectClasses": asRecords(objectClasses()),
 			"controllers":   asRecords([]extension.ControllerDeclaration{controller()}),
 			"pages":         asRecords(Pages()),
 		},
-		"dependencies": map[string]any{
-			"framework": FrameworkVersion,
-		},
-		"permissions": map[string]any{
-			"write": asRecords([]manifest.WriteScope{controllerWriteScope()}),
-			// The controller reads the run kernel's core event stream, which the
-			// SDK's read scope cannot name: its apiGroup is required and the core
-			// group is the empty string. No placeholder group is invented; the
-			// gap is reported as a cross-repository interface misalignment.
-			"objectRoles": objectRolesRecord(),
-		},
-		"config": map[string]any{"schema": configSchema()},
-		"status": map[string]any{
-			"component": map[string]any{
-				"conditions": []any{ConditionReconciled},
-			},
-			"objectClasses": map[string]any{
-				KindDeliveryRecord: map[string]any{
-					"writer":     StatusWriterController,
-					"conditions": []any{ConditionReconciled, ConditionDeliveryFailed},
-				},
-			},
-		},
-		// The contribution identity the declaration exposes is the class kind,
-		// so the retention block is keyed by it (KOSD-C-29). Records survive the
-		// uninstall and appear in the residual list (NOTIFY-C-6).
-		"uninstallRetention": map[string]any{
-			"contributions": map[string]any{
-				KindChannel:        "retain",
-				KindSubscription:   "retain",
-				KindDeliveryRecord: "retain",
-			},
-		},
+		"dependencies":  map[string]any{},
+		"permissions":   asRecords(permissions()),
+		"configuration": asRecord(configuration()),
+		"retention":     asRecords(retention()),
 	}
 }
 
@@ -189,54 +161,68 @@ func Validated() (manifest.ExtensionManifest, error) {
 	return *checked.Manifest, nil
 }
 
-// objectClasses declares the three classes (KOSD-C-19). Their fields are the
-// SDK's object class declaration; the product adds none.
+// objectClasses declares the three classes in the extension's own group and
+// version; none is namespaced (KOSD-C-19, NOTIFY-C-1).
 func objectClasses() []extension.ObjectClassDeclaration {
 	return []extension.ObjectClassDeclaration{
-		{APIGroup: APIGroup, Version: ObjectVersion, Kind: KindChannel, Scope: extension.ScopeCluster},
-		{APIGroup: APIGroup, Version: ObjectVersion, Kind: KindSubscription, Scope: extension.ScopeCluster},
-		{APIGroup: APIGroup, Version: ObjectVersion, Kind: KindDeliveryRecord, Scope: extension.ScopeCluster},
+		{Group: APIGroup, Kind: KindChannel, Resource: ResourceChannel, Versions: []string{ObjectVersion}},
+		{Group: APIGroup, Kind: KindSubscription, Resource: ResourceSubscription, Versions: []string{ObjectVersion}},
+		{Group: APIGroup, Kind: KindDeliveryRecord, Resource: ResourceDeliveryRecord, Versions: []string{ObjectVersion}},
 	}
 }
 
-// controller declares the delivery controller and the class it writes
-// (KOSD-C-20).
+// controller declares the delivery controller: it serves the delivery record
+// class and writes only inside the extension's own group (KOSD-C-20).
 func controller() extension.ControllerDeclaration {
 	return extension.ControllerDeclaration{
-		Name: ControllerDelivery,
-		WriteScopes: []extension.ControllerWriteScope{{
-			APIGroup: APIGroup,
-			Kind:     KindDeliveryRecord,
-			Verbs:    writeVerbs(),
-		}},
+		ID:      ControllerDelivery,
+		Manages: []extension.GroupKind{{Group: APIGroup, Kind: KindDeliveryRecord}},
+		Scope:   extension.ControllerScope{Groups: []string{APIGroup}},
 	}
 }
 
-// controllerWriteScope is the same grant in the permission block (KOSD-C-18).
-func controllerWriteScope() manifest.WriteScope {
-	return manifest.WriteScope{
-		APIGroup:  APIGroup,
-		Resources: []string{ResourceDeliveryRecord},
-		Verbs:     writeVerbs(),
+// permissions declares what the contributions read and which session roles may
+// write the extension's objects (KOSD-C-18, KOSD-C-59). The writer vocabulary is
+// session roles only, so the record class names none and the product keeps
+// refusing every user role in its own write path (NOTIFY-C-3). The controller
+// reads the core event group, named by the empty string (KOSD-C-64, NOTIFY-C-2).
+func permissions() []manifest.ExtensionPermission {
+	return []manifest.ExtensionPermission{
+		{
+			Contribution: ControllerDelivery,
+			ReadScope: manifest.ReadScope{
+				Groups: []string{APIGroup, ""},
+				Kinds: []extension.GroupKind{
+					{Group: APIGroup, Kind: KindChannel},
+					{Group: APIGroup, Kind: KindSubscription},
+					{Group: APIGroup, Kind: KindDeliveryRecord},
+					{Kind: CoreKindEvent},
+				},
+			},
+		},
+		{Contribution: KindChannel, ObjectWriters: []manifest.Role{manifest.RoleOwner}},
+		{Contribution: KindSubscription, ObjectWriters: []manifest.Role{manifest.RoleOwner}},
 	}
 }
 
-// writeVerbs is the verb set the controller holds on its class (KOSD-C-20).
-func writeVerbs() []string {
-	return []string{"get", "list", "watch", "create", "update", "patch", "delete"}
+// configuration is the channel and subscription structure the create and edit
+// entries render, and the conditions the classes carry (KOSD-C-18). No session
+// role writes extension object status; the controller does (KOSD-C-03).
+func configuration() manifest.Configuration {
+	return manifest.Configuration{
+		Schema:     configSchema(),
+		Conditions: []string{ConditionReconciled, ConditionDeliveryFailed},
+	}
 }
 
-// objectRolesRecord renders the declared writer roles (KOSD-C-18).
-func objectRolesRecord() map[string]any {
-	roles := make(map[string]any, len(declaredObjectRoles))
-	for kind, writers := range declaredObjectRoles {
-		names := make([]any, 0, len(writers))
-		for _, writer := range writers {
-			names = append(names, string(writer))
-		}
-		roles[kind] = names
+// retention keeps every class across an uninstall; the kernel matches an entry
+// by the class kind and lists what it kept (KOSD-C-29, NOTIFY-C-6).
+func retention() []manifest.Retention {
+	return []manifest.Retention{
+		{Resource: KindChannel, Keep: true},
+		{Resource: KindSubscription, Keep: true},
+		{Resource: KindDeliveryRecord, Keep: true},
 	}
-	return roles
 }
 
 // configSchema is the configuration structure the create and edit entries

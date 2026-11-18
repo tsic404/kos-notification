@@ -48,8 +48,10 @@ func TestTC6RecordVisibilityAndRetention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the installed declaration: %v", err)
 	}
-	if action := declaration.UninstallRetention.Contributions[notification.KindDeliveryRecord]; action != manifest.Retain {
-		t.Fatalf("the delivery record retention is %q, want %q", action, manifest.Retain)
+	if !slices.ContainsFunc(declaration.Retention, func(entry manifest.Retention) bool {
+		return entry.Resource == notification.KindDeliveryRecord && entry.Keep
+	}) {
+		t.Fatalf("the delivery record is not declared kept on uninstall: %+v", declaration.Retention)
 	}
 
 	// One source application naming two members, and one non-application object
